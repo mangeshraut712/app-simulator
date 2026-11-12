@@ -20,6 +20,27 @@ python3 createManifests.py [--config myconfigfile.yaml] [--debug]
 If successful, the script will render a number of YAML files for k8s deployment in the ./deployments folder.
 **Existing files will be overwritten!**
 
+## Service aliases
+
+Supported application services (`java`, `nodejs`, `dotnetcore`) and MySQL
+can specify an `aliases` list. Each alias creates an additional internal
+ClusterIP Service pointing to the original Deployment, with the same ports
+and annotations. No extra Deployment, ConfigMap or LoadBalancer is created.
+
+```yaml
+services:
+  backend:
+    type: java
+    aliases: [orders, inventory]
+```
+
+Alias names must be unique across generated Services, including names ending
+in `-ext` for exposed Services. They must contain 1–63 lowercase letters,
+digits or hyphens, start with a letter, and end with a letter or digit.
+Invalid or duplicate aliases are rejected before manifests are written.
+Use an empty list to disable inherited aliases from `global.k8s`.
+Aliases are not generated for loaders or unsupported/custom service types.
+
 ## Info
 
 ## Template Variables

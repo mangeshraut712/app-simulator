@@ -1,6 +1,7 @@
 import argparse
 import json
 import os
+import re
 
 import yaml
 from jinja2 import Template
@@ -90,6 +91,50 @@ def debug_print(*args, **kwargs):
         print(*args, **kwargs)
 
 
+def validate_service_aliases(yaml_data, global_config):
+    reserved = set()
+    components = []
+    for group, types in (("services", {"java", "nodejs", "dotnetcore"}),
+                         ("databases", {"mysql"})):
+        for name, config in yaml_data.get(group, {}).items():
+            if config["type"] not in types:
+                continue
+            config = merge_dicts(global_config, config)
+            reserved.add(name)
+            if config.get("exposedPort") is not None:
+                reserved.add(f"{name}-ext")
+            components.append(config)
+    for group, items in yaml_data.items():
+        if group not in {"services", "databases", "loaders"} and isinstance(items, dict):
+            for name, config in items.items():
+                reserved.add(name)
+                if isinstance(config, dict) and merge_dicts(global_config, config).get(
+                    "exposedPort"
+                ) is not None:
+                    reserved.add(f"{name}-ext")
+    for config in components:
+        aliases = config.get("aliases", [])
+        if not isinstance(aliases, list):
+            raise TypeError("aliases must be a list of Kubernetes Service names")
+        for alias in aliases:
+            if not isinstance(alias, str) or not re.fullmatch(
+                r"[a-z](?:[a-z0-9-]{0,61}[a-z0-9])?", alias
+            ):
+                raise ValueError(f"Invalid Kubernetes Service alias: {alias!r}")
+            if alias in reserved:
+                raise ValueError(f"Duplicate Kubernetes Service name: {alias!r}")
+            reserved.add(alias)
+
+
+def write_service_aliases(group, config, service):
+    for alias in config.get("aliases", []):
+        internal_config = config.copy()
+        internal_config.pop("exposedPort", None)
+        manifest = renderService2(group, internal_config, service)
+        manifest["metadata"]["name"] = alias
+        write_yaml(f"./deployments/{alias}-service.yaml", manifest)
+
+
 # Example usage
 def main():
     global debug_mode
@@ -128,6 +173,7 @@ def main():
         globalConfig = merge_dicts(gconfig, globalConfigK8s)
         yaml_data.pop("global", None)
         debug_print("Global Config:\n", json.dumps(globalConfig, indent=2))
+        validate_service_aliases(yaml_data, globalConfig)
         # Ok, lets start to parse through the services and render the k8s deployments
         for key, value in yaml_data.items():
             if key == "services":
@@ -165,6 +211,7 @@ def main():
                                 f"./deployments/{service}-service.yaml",
                                 renderService2(key, config, service),
                             )
+                        write_service_aliases(key, config, service)
                     else:
                         print(
                             f"Unsupported service type detected {config['type']} named {service}"
@@ -225,6 +272,7 @@ def main():
                                 f"./deployments/{service}-service.yaml",
                                 renderService2(key, config, service),
                             )
+                        write_service_aliases(key, config, service)
                     else:
                         print(
                             f"Unsupported service type detected {config['type']} named {service}"
